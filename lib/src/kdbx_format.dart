@@ -7,6 +7,7 @@ import 'package:archive/archive.dart';
 import 'package:argon2_ffi_base/argon2_ffi_base.dart';
 import 'package:collection/collection.dart' show IterableExtension;
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:dart_pg/src/crypto/symmetric/twofish.dart';
 import 'package:kdbx/kdbx.dart';
 import 'package:kdbx/src/crypto/key_encrypter_kdf.dart';
 import 'package:kdbx/src/crypto/protected_salt_generator.dart';
@@ -194,6 +195,9 @@ class KdbxBody extends KdbxNode {
       _logger.fine('We need chacha20');
       return kdbxFile.kdbxFormat
           .transformContentV4ChaCha20(header, compressedBytes!, cipherKey);
+    } else if (cipher == Cipher.twoFish) {
+      return kdbxFile.kdbxFormat
+          .encryptTwoFish(header, compressedBytes!, cipherKey);
     } else {
       throw UnsupportedError('Unsupported cipherId $cipher');
     }
@@ -663,9 +667,41 @@ class KdbxFormat {
       _logger.fine('We need chacha20');
 //      throw UnsupportedError('chacha20 not yet supported $cipherId');
       return transformContentV4ChaCha20(header, encrypted, cipherKey);
+    } else if (cipher == Cipher.twoFish) {
+      _logger.fine('We need twoFish');
+      return decryptTwoFish(header, encrypted, cipherKey);
     } else {
       throw UnsupportedError('Unsupported cipherId $cipher');
     }
+  }
+
+  Uint8List decryptTwoFish(
+      KdbxHeader header, Uint8List encrypted, Uint8List cipherKey) {
+    final encryptionIv = header.fields[HeaderFields.EncryptionIV]!.bytes;
+    final c = CBCBlockCipher(TwofishEngine());
+    c.init(false, ParametersWithIV(KeyParameter(cipherKey), encryptionIv));
+    int offset = 0;
+    final out = Uint8List(encrypted.length);
+    while (offset < encrypted.length) {
+      offset += c.processBlock(encrypted, offset, out, offset);
+    }
+    return out;
+  }
+
+  Uint8List encryptTwoFish(
+      KdbxHeader header, Uint8List plainText, Uint8List cipherKey) {
+    final encryptionIv = header.fields[HeaderFields.EncryptionIV]!.bytes;
+    final c =
+        PaddedBlockCipherImpl(PKCS7Padding(), CBCBlockCipher(TwofishEngine()));
+    final parametersWithIV =
+        ParametersWithIV(KeyParameter(cipherKey), encryptionIv);
+    c.init(
+        true,
+        PaddedBlockCipherParameters(
+          parametersWithIV,
+          null,
+        ));
+    return c.process(plainText);
   }
 
   Uint8List transformContentV4ChaCha20(
